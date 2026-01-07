@@ -1,60 +1,105 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import './attendance-map.css'
 
-export default function AdminAttendance() {
-  const [rows, setRows] = useState<any[]>([])
-  const [date, setDate] = useState('')
+type Attendance = {
+  id: string
+  user_id: string
+  work_date: string
+  check_in: string
+  latitude: number
+  longitude: number
+  photo_url: string
+}
 
+export default function AdminAttendanceMap() {
+  const mapRef = useRef<any>(null)
+  const mapContainerRef = useRef<HTMLDivElement | null>(null)
+  const [records, setRecords] = useState<Attendance[]>([])
+
+  /* 1️⃣ Load attendance data */
   useEffect(() => {
+    const load = async () => {
+      const { data, error } = await supabase
+        .from('attendance')
+        .select('*')
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null)
+
+      if (error) {
+        console.error(error)
+        return
+      }
+
+      setRecords(data || [])
+    }
+
     load()
-  }, [date])
+  }, [])
 
-  const load = async () => {
-    let query = supabase
-      .from('attendance')
-      .select('*, profiles(role)')
-      .order('work_date', { ascending: false })
+  /* 2️⃣ Init map AFTER DOM + data are ready */
+  useEffect(() => {
+    if (records.length === 0) return
+    if (!mapContainerRef.current) return
+    if (mapRef.current) return
 
-    if (date) query = query.eq('work_date', date)
+    initMap()
+  }, [records])
 
-    const { data } = await query
-    setRows(data || [])
+  const initMap = async () => {
+    const L = (await import('leaflet')).default
+
+    // 🔥 REQUIRED: fix missing marker icons
+    delete (L.Icon.Default.prototype as any)._getIconUrl
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl:
+        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl:
+        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl:
+        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    })
+
+    // Initialize map
+    mapRef.current = L.map(mapContainerRef.current!).setView(
+      [records[0].latitude, records[0].longitude],
+      11
+    )
+
+    // Tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+    }).addTo(mapRef.current)
+
+    // Force resize after mount
+    setTimeout(() => {
+      mapRef.current.invalidateSize()
+    }, 300)
+
+    // Markers
+    records.forEach((r) => {
+      const photoUrl = supabase.storage
+        .from('attendance-photos')
+        .getPublicUrl(r.photo_url).data.publicUrl
+
+      L.marker([Number(r.latitude), Number(r.longitude)])
+        .addTo(mapRef.current)
+        .bindPopup(`
+          <strong>Technician ID:</strong> ${r.user_id}<br/>
+          <strong>Date:</strong> ${r.work_date}<br/>
+          <strong>Check-In:</strong> ${new Date(r.check_in).toLocaleTimeString()}<br/>
+          <img src="${photoUrl}"
+               style="margin-top:8px;width:180px;border-radius:8px"/>
+        `)
+    })
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <h1>Attendance Records</h1>
-
-      <input
-        type="date"
-        value={date}
-        onChange={(e) => setDate(e.target.value)}
-      />
-
-      <table>
-        <thead>
-          <tr>
-            <th>User</th>
-            <th>Date</th>
-            <th>In</th>
-            <th>Out</th>
-            <th>Remarks</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id}>
-              <td>{r.user_id}</td>
-              <td>{r.work_date}</td>
-              <td>{r.check_in && new Date(r.check_in).toLocaleTimeString()}</td>
-              <td>{r.check_out && new Date(r.check_out).toLocaleTimeString()}</td>
-              <td>{r.remarks}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="map-page">
+      <h1>Attendance – Map View</h1>
+      <div ref={mapContainerRef} id="attendance-map" />
     </div>
   )
 }

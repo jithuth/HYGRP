@@ -1,5 +1,3 @@
-import './globals.css'
-
 export default function RootLayout({
   children,
 }: {
@@ -7,9 +5,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-gray-100 text-gray-900">
-        {children}
-      </body>
+      <head>
+        {/* Leaflet CSS */}
+        <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        />
+      </head>
+      <body>{children}</body>
     </html>
   )
 }
