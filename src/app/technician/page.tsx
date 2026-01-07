@@ -6,10 +6,37 @@ import LogoutButton from '@/components/LogoutButton'
 import './technician.css'
 
 /* =========================
-   WATERMARK HELPER
+   Reverse Geocode (GPS → Place)
+========================= */
+async function reverseGeocode(lat: string, lng: string): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+      {
+        headers: { 'User-Agent': 'HYGRP-Attendance-System' },
+      }
+    )
+
+    const data = await res.json()
+
+    return (
+      data.address?.suburb ||
+      data.address?.neighbourhood ||
+      data.address?.city ||
+      data.address?.town ||
+      data.address?.state ||
+      'Location Unknown'
+    )
+  } catch {
+    return 'Location Unknown'
+  }
+}
+
+/* =========================
+   Watermark Engine
 ========================= */
 async function addWatermark(file: File): Promise<Blob> {
-  // 1. Get GPS
+  // 1. GPS
   const position = await new Promise<GeolocationPosition>((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(resolve, reject, {
       enableHighAccuracy: true,
@@ -20,12 +47,18 @@ async function addWatermark(file: File): Promise<Blob> {
   const lat = position.coords.latitude.toFixed(6)
   const lng = position.coords.longitude.toFixed(6)
 
-  // 2. GMT +03 timestamp
+  // 2. Place name
+  const place = await reverseGeocode(lat, lng)
+
+  // 3. GMT +03 timestamp
   const now = new Date()
   const gmt3 = new Date(now.getTime() + 3 * 60 * 60 * 1000)
-  const timestamp = gmt3.toISOString().replace('T', ' ').slice(0, 16)
+  const timestamp = gmt3
+    .toISOString()
+    .replace('T', ' ')
+    .slice(0, 16)
 
-  // 3. Load image
+  // 4. Load image
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image()
     image.onload = () => resolve(image)
@@ -33,7 +66,7 @@ async function addWatermark(file: File): Promise<Blob> {
     image.src = URL.createObjectURL(file)
   })
 
-  // 4. Canvas
+  // 5. Canvas
   const canvas = document.createElement('canvas')
   canvas.width = img.width
   canvas.height = img.height
@@ -41,44 +74,53 @@ async function addWatermark(file: File): Promise<Blob> {
   const ctx = canvas.getContext('2d')!
   ctx.drawImage(img, 0, 0)
 
-  // 5. Watermark style
-  ctx.font = 'bold 32px Arial'
-  ctx.fillStyle = 'rgba(255,255,255,0.9)'
-  ctx.strokeStyle = 'rgba(0,0,0,0.8)'
-  ctx.lineWidth = 4
-
+  // 6. Watermark text
   const lines = [
+    `📍 ${place}`,
+    `Lat: ${lat}, Lng: ${lng}`,
     `${timestamp} (GMT+03)`,
-    `Lat: ${lat}`,
-    `Lng: ${lng}`,
   ]
 
-  let y = canvas.height - 120
+  const fontSize = Math.max(36, Math.floor(canvas.width / 28))
+  ctx.font = `bold ${fontSize}px Arial`
+  ctx.textAlign = 'center'
+
+  const padding = 24
+  const lineHeight = fontSize + 12
+  const boxHeight = lines.length * lineHeight + padding * 2
+  const boxY = canvas.height - boxHeight - 30
+
+  // Background box
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'
+  ctx.fillRect(canvas.width * 0.1, boxY, canvas.width * 0.8, boxHeight)
+
+  // Text
+  ctx.fillStyle = '#ffffff'
+  ctx.strokeStyle = '#000000'
+  ctx.lineWidth = 3
+
+  let y = boxY + padding + fontSize
+
   for (const line of lines) {
-    ctx.strokeText(line, 20, y)
-    ctx.fillText(line, 20, y)
-    y += 40
+    ctx.strokeText(line, canvas.width / 2, y)
+    ctx.fillText(line, canvas.width / 2, y)
+    y += lineHeight
   }
 
-  // 6. Export
+  // 7. Export
   return await new Promise((resolve) => {
-    canvas.toBlob(
-      (blob) => resolve(blob!),
-      'image/jpeg',
-      0.9
-    )
+    canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.9)
   })
 }
 
 /* =========================
-   TECHNICIAN PAGE
+   Technician Page
 ========================= */
 export default function TechnicianDashboard() {
   const [attendance, setAttendance] = useState<any>(null)
   const [remarks, setRemarks] = useState('')
   const [photo, setPhoto] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const today = new Date().toISOString().slice(0, 10)
 
@@ -123,7 +165,6 @@ export default function TechnicianDashboard() {
   }
 
   const checkIn = async () => {
-    setError(null)
     setLoading(true)
 
     const { data: { user } } = await supabase.auth.getUser()
@@ -178,14 +219,14 @@ export default function TechnicianDashboard() {
           onChange={(e) => setRemarks(e.target.value)}
         />
 
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          onChange={(e) => setPhoto(e.target.files?.[0] || null)}
-        />
-
-        {error && <div className="error">{error}</div>}
+        {!attendance && (
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={(e) => setPhoto(e.target.files?.[0] || null)}
+          />
+        )}
 
         {!attendance && (
           <button onClick={checkIn} disabled={loading}>
