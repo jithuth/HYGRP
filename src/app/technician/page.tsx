@@ -3,19 +3,22 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { processImageWithWatermark } from '@/lib/imageWithWatermark'
+import { reverseGeocode } from '@/lib/reverseGeocode'
 import './technician-attendance.css'
 
 export default function TechnicianAttendance() {
   const [photo, setPhoto] = useState<File | null>(null)
   const [attendanceId, setAttendanceId] = useState<string | null>(null)
+  const [attendanceCompleted, setAttendanceCompleted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
 
   useEffect(() => {
-    detectOpenAttendance()
+    checkTodayAttendance()
   }, [])
 
-  const detectOpenAttendance = async () => {
+  /* 🔍 Detect today attendance state */
+  const checkTodayAttendance = async () => {
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) return
 
@@ -23,15 +26,24 @@ export default function TechnicianAttendance() {
 
     const { data } = await supabase
       .from('attendance')
-      .select('id')
+      .select('id, check_out')
       .eq('user_id', auth.user.id)
       .eq('work_date', today)
-      .is('check_out', null)
       .maybeSingle()
 
-    if (data) setAttendanceId(data.id)
+    if (!data) return
+
+    if (data.check_out) {
+      setAttendanceCompleted(true)
+      setAttendanceId(null)
+      setStatus('Attendance already completed for today')
+    } else {
+      setAttendanceId(data.id)
+      setStatus('You are already checked in')
+    }
   }
 
+  /* 📍 GPS */
   const getLocation = (): Promise<{ lat: number; lon: number }> =>
     new Promise((resolve, reject) =>
       navigator.geolocation.getCurrentPosition(
@@ -41,11 +53,12 @@ export default function TechnicianAttendance() {
             lon: p.coords.longitude,
           }),
         reject,
-        { enableHighAccuracy: true }
+        { enableHighAccuracy: true, timeout: 15000 }
       )
     )
 
-  const uploadPhoto = async (
+  /* 📸 Upload compressed + watermarked photo */
+  const uploadWatermarkedPhoto = async (
     file: File,
     type: 'CHECK-IN' | 'CHECK-OUT',
     lat: number,
@@ -56,9 +69,13 @@ export default function TechnicianAttendance() {
       hour12: false,
     })
 
-    const watermark = `${type} | ${time} | LAT ${lat.toFixed(
-      5
-    )}, LNG ${lon.toFixed(5)}`
+    const place = await reverseGeocode(lat, lon)
+
+    const watermark = [
+      `${type} | ${time}`,
+      place,
+      `Lat ${lat.toFixed(5)}, Lon ${lon.toFixed(5)}`,
+    ].join('\n')
 
     const processed = await processImageWithWatermark(file, watermark)
 
@@ -68,32 +85,54 @@ export default function TechnicianAttendance() {
       .from('attendance-photos')
       .upload(path, processed, {
         contentType: 'image/jpeg',
+        upsert: false,
       })
 
     if (error) throw error
     return path
   }
 
+  /* ✅ CHECK-IN (ONE PER DAY) */
   const handleCheckIn = async () => {
     if (!photo) return alert('Photo required')
 
     setLoading(true)
-    setStatus('Checking in...')
+    setStatus('Checking attendance...')
 
     try {
       const { user } = (await supabase.auth.getUser()).data
       if (!user) throw new Error('Not logged in')
 
-      const { lat, lon } = await getLocation()
+      const today = new Date().toISOString().slice(0, 10)
 
-      const photoPath = await uploadPhoto(photo, 'CHECK-IN', lat, lon)
+      // 🔒 HARD CHECK – does attendance already exist today?
+      const { data: existing } = await supabase
+        .from('attendance')
+        .select('id, check_out')
+        .eq('user_id', user.id)
+        .eq('work_date', today)
+        .maybeSingle()
+
+      if (existing) {
+        if (existing.check_out === null) {
+          setAttendanceId(existing.id)
+          setStatus('You are already checked in')
+        } else {
+          setAttendanceCompleted(true)
+          setStatus('Attendance already completed for today')
+        }
+        setLoading(false)
+        return
+      }
+
+      // 🔥 Fresh check-in
+      const { lat, lon } = await getLocation()
+      const photoPath = await uploadWatermarkedPhoto(photo, 'CHECK-IN', lat, lon)
 
       const FullName =
         user.user_metadata?.full_name ||
         user.email ||
         'Technician'
-
-      const today = new Date().toISOString().slice(0, 10)
 
       const { data, error } = await supabase
         .from('attendance')
@@ -115,12 +154,13 @@ export default function TechnicianAttendance() {
       setPhoto(null)
       setStatus('Checked in successfully')
     } catch (e: any) {
-      alert(e.message)
+      alert(e.message || 'Check-in failed')
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
+  /* ❌ CHECK-OUT */
   const handleCheckOut = async () => {
     if (!photo || !attendanceId) return alert('Photo required')
 
@@ -129,10 +169,9 @@ export default function TechnicianAttendance() {
 
     try {
       const { lat, lon } = await getLocation()
+      const photoPath = await uploadWatermarkedPhoto(photo, 'CHECK-OUT', lat, lon)
 
-      const photoPath = await uploadPhoto(photo, 'CHECK-OUT', lat, lon)
-
-      await supabase
+      const { error } = await supabase
         .from('attendance')
         .update({
           check_out: new Date().toISOString(),
@@ -142,14 +181,17 @@ export default function TechnicianAttendance() {
         })
         .eq('id', attendanceId)
 
-      setAttendanceId(null)
-      setPhoto(null)
-      setStatus('Checked out successfully')
-    } catch (e: any) {
-      alert(e.message)
-    }
+      if (error) throw error
 
-    setLoading(false)
+      setAttendanceId(null)
+      setAttendanceCompleted(true)
+      setPhoto(null)
+      setStatus('Attendance completed for today')
+    } catch (e: any) {
+      alert(e.message || 'Check-out failed')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -157,50 +199,57 @@ export default function TechnicianAttendance() {
       <div className="card">
         <h1>Attendance</h1>
 
-        <p className="info">
-          {attendanceId
-            ? 'You are checked in'
-            : 'You are not checked in'}
-        </p>
+        <p className="info">{status || 'Ready'}</p>
 
-        <label className="upload">
-          Upload Photo
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) =>
-              e.target.files && setPhoto(e.target.files[0])
-            }
-          />
-        </label>
+        {!attendanceCompleted && (
+          <>
+            <label className="upload">
+              Upload Photo
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                disabled={loading}
+                onChange={(e) =>
+                  e.target.files && setPhoto(e.target.files[0])
+                }
+              />
+            </label>
 
-        {photo && (
-          <img
-            src={URL.createObjectURL(photo)}
-            className="preview"
-          />
+            {photo && (
+              <img
+                src={URL.createObjectURL(photo)}
+                className="preview"
+              />
+            )}
+          </>
         )}
 
-        {!attendanceId ? (
+        {!attendanceCompleted && !attendanceId && (
           <button
             className="btn checkin"
+            disabled={loading}
             onClick={handleCheckIn}
-            disabled={loading}
           >
-            Check In
-          </button>
-        ) : (
-          <button
-            className="btn checkout"
-            onClick={handleCheckOut}
-            disabled={loading}
-          >
-            Check Out
+            {loading ? 'Please wait…' : 'Check In'}
           </button>
         )}
 
-        {status && <p className="status">{status}</p>}
+        {!attendanceCompleted && attendanceId && (
+          <button
+            className="btn checkout"
+            disabled={loading}
+            onClick={handleCheckOut}
+          >
+            {loading ? 'Please wait…' : 'Check Out'}
+          </button>
+        )}
+
+        {attendanceCompleted && (
+          <p className="done">
+            Attendance completed for today
+          </p>
+        )}
       </div>
     </div>
   )
