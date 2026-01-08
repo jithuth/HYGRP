@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import './technician-attendance.css'
 
 export default function TechnicianAttendance() {
   const [attendanceId, setAttendanceId] = useState<string | null>(null)
+  const [photo, setPhoto] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState('')
 
   useEffect(() => {
     detectOpenAttendance()
@@ -57,14 +60,20 @@ export default function TechnicianAttendance() {
     return data?.full_name ?? 'Unknown'
   }
 
-  const checkIn = async (file: File) => {
+  const handleCheckIn = async () => {
+    if (!photo) {
+      alert('Please upload a photo')
+      return
+    }
+
     setLoading(true)
+    setStatus('Checking in...')
 
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) return
 
     const { lat, lon } = await getLocation()
-    const photo = await uploadPhoto(file)
+    const photoPath = await uploadPhoto(photo)
     const FullName = await getFullName(auth.user.id)
 
     const { data } = await supabase
@@ -75,21 +84,28 @@ export default function TechnicianAttendance() {
         check_in: new Date().toISOString(),
         check_in_latitude: lat,
         check_in_longitude: lon,
-        check_in_photo: photo,
+        check_in_photo: photoPath,
       })
       .select()
       .single()
 
     setAttendanceId(data.id)
+    setPhoto(null)
+    setStatus('Checked in successfully')
     setLoading(false)
   }
 
-  const checkOut = async (file: File) => {
-    if (!attendanceId) return
+  const handleCheckOut = async () => {
+    if (!photo || !attendanceId) {
+      alert('Please upload a photo')
+      return
+    }
+
     setLoading(true)
+    setStatus('Checking out...')
 
     const { lat, lon } = await getLocation()
-    const photo = await uploadPhoto(file)
+    const photoPath = await uploadPhoto(photo)
 
     await supabase
       .from('attendance')
@@ -97,45 +113,66 @@ export default function TechnicianAttendance() {
         check_out: new Date().toISOString(),
         check_out_latitude: lat,
         check_out_longitude: lon,
-        check_out_photo: photo,
+        check_out_photo: photoPath,
       })
       .eq('id', attendanceId)
 
     setAttendanceId(null)
+    setPhoto(null)
+    setStatus('Checked out successfully')
     setLoading(false)
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Attendance</h2>
+    <div className="tech-container">
+      <h1>Attendance</h1>
 
-      {!attendanceId ? (
-        <>
-          <p>Check-In (photo required)</p>
+      <div className="card">
+        <p className="status">
+          {attendanceId
+            ? 'You are currently checked in'
+            : 'You are not checked in'}
+        </p>
+
+        <label className="upload-box">
+          Upload Photo
           <input
             type="file"
             accept="image/*"
             capture="environment"
-            disabled={loading}
             onChange={(e) =>
-              e.target.files && checkIn(e.target.files[0])
+              e.target.files && setPhoto(e.target.files[0])
             }
           />
-        </>
-      ) : (
-        <>
-          <p>Check-Out (photo required)</p>
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            disabled={loading}
-            onChange={(e) =>
-              e.target.files && checkOut(e.target.files[0])
-            }
+        </label>
+
+        {photo && (
+          <img
+            src={URL.createObjectURL(photo)}
+            className="preview"
           />
-        </>
-      )}
+        )}
+
+        {!attendanceId ? (
+          <button
+            className="btn checkin"
+            onClick={handleCheckIn}
+            disabled={loading}
+          >
+            Check In
+          </button>
+        ) : (
+          <button
+            className="btn checkout"
+            onClick={handleCheckOut}
+            disabled={loading}
+          >
+            Check Out
+          </button>
+        )}
+
+        {status && <p className="status-text">{status}</p>}
+      </div>
     </div>
   )
 }
