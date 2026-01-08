@@ -4,7 +4,10 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { processImageWithWatermark } from '@/lib/imageWithWatermark'
 import { reverseGeocode } from '@/lib/reverseGeocode'
+import { detectFace } from '@/lib/faceDetection'
 import './technician-attendance.css'
+
+const round5 = (v: number) => Number(v.toFixed(5))
 
 export default function TechnicianAttendance() {
   const [photo, setPhoto] = useState<File | null>(null)
@@ -17,7 +20,7 @@ export default function TechnicianAttendance() {
     checkTodayAttendance()
   }, [])
 
-  /* 🔍 Detect today attendance state */
+  /* 🔍 Detect today attendance */
   const checkTodayAttendance = async () => {
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) return
@@ -35,7 +38,6 @@ export default function TechnicianAttendance() {
 
     if (data.check_out) {
       setAttendanceCompleted(true)
-      setAttendanceId(null)
       setStatus('Attendance already completed for today')
     } else {
       setAttendanceId(data.id)
@@ -49,15 +51,42 @@ export default function TechnicianAttendance() {
       navigator.geolocation.getCurrentPosition(
         (p) =>
           resolve({
-            lat: p.coords.latitude,
-            lon: p.coords.longitude,
+            lat: round5(p.coords.latitude),
+            lon: round5(p.coords.longitude),
           }),
         reject,
         { enableHighAccuracy: true, timeout: 15000 }
       )
     )
 
-  /* 📸 Upload compressed + watermarked photo */
+  /* 📸 Camera + face validation */
+  const handlePhotoSelect = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Invalid file')
+      return
+    }
+
+    setLoading(true)
+    setStatus('Validating photo…')
+
+    try {
+      const hasFace = await detectFace(file)
+      if (!hasFace) {
+        alert('No face detected. Please take a clear selfie.')
+        setLoading(false)
+        return
+      }
+
+      setPhoto(file)
+      setStatus('Photo verified')
+    } catch {
+      alert('Unable to verify photo')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  /* 📤 Upload with watermark */
   const uploadWatermarkedPhoto = async (
     file: File,
     type: 'CHECK-IN' | 'CHECK-OUT',
@@ -92,12 +121,12 @@ export default function TechnicianAttendance() {
     return path
   }
 
-  /* ✅ CHECK-IN (ONE PER DAY) */
+  /* ✅ CHECK-IN */
   const handleCheckIn = async () => {
     if (!photo) return alert('Photo required')
 
     setLoading(true)
-    setStatus('Checking attendance...')
+    setStatus('Checking in…')
 
     try {
       const { user } = (await supabase.auth.getUser()).data
@@ -105,7 +134,6 @@ export default function TechnicianAttendance() {
 
       const today = new Date().toISOString().slice(0, 10)
 
-      // 🔒 HARD CHECK – does attendance already exist today?
       const { data: existing } = await supabase
         .from('attendance')
         .select('id, check_out')
@@ -114,18 +142,11 @@ export default function TechnicianAttendance() {
         .maybeSingle()
 
       if (existing) {
-        if (existing.check_out === null) {
-          setAttendanceId(existing.id)
-          setStatus('You are already checked in')
-        } else {
-          setAttendanceCompleted(true)
-          setStatus('Attendance already completed for today')
-        }
+        alert('Attendance already exists for today')
         setLoading(false)
         return
       }
 
-      // 🔥 Fresh check-in
       const { lat, lon } = await getLocation()
       const photoPath = await uploadWatermarkedPhoto(photo, 'CHECK-IN', lat, lon)
 
@@ -165,13 +186,13 @@ export default function TechnicianAttendance() {
     if (!photo || !attendanceId) return alert('Photo required')
 
     setLoading(true)
-    setStatus('Checking out...')
+    setStatus('Checking out…')
 
     try {
       const { lat, lon } = await getLocation()
       const photoPath = await uploadWatermarkedPhoto(photo, 'CHECK-OUT', lat, lon)
 
-      const { error } = await supabase
+      await supabase
         .from('attendance')
         .update({
           check_out: new Date().toISOString(),
@@ -181,10 +202,8 @@ export default function TechnicianAttendance() {
         })
         .eq('id', attendanceId)
 
-      if (error) throw error
-
-      setAttendanceId(null)
       setAttendanceCompleted(true)
+      setAttendanceId(null)
       setPhoto(null)
       setStatus('Attendance completed for today')
     } catch (e: any) {
@@ -198,20 +217,19 @@ export default function TechnicianAttendance() {
     <div className="tech-container">
       <div className="card">
         <h1>Attendance</h1>
-
         <p className="info">{status || 'Ready'}</p>
 
         {!attendanceCompleted && (
           <>
             <label className="upload">
-              Upload Photo
+              Take Photo
               <input
                 type="file"
                 accept="image/*"
-                capture="environment"
+                 capture="user"
                 disabled={loading}
                 onChange={(e) =>
-                  e.target.files && setPhoto(e.target.files[0])
+                  e.target.files && handlePhotoSelect(e.target.files[0])
                 }
               />
             </label>
@@ -226,29 +244,19 @@ export default function TechnicianAttendance() {
         )}
 
         {!attendanceCompleted && !attendanceId && (
-          <button
-            className="btn checkin"
-            disabled={loading}
-            onClick={handleCheckIn}
-          >
-            {loading ? 'Please wait…' : 'Check In'}
+          <button className="btn checkin" onClick={handleCheckIn} disabled={loading}>
+            Check In
           </button>
         )}
 
         {!attendanceCompleted && attendanceId && (
-          <button
-            className="btn checkout"
-            disabled={loading}
-            onClick={handleCheckOut}
-          >
-            {loading ? 'Please wait…' : 'Check Out'}
+          <button className="btn checkout" onClick={handleCheckOut} disabled={loading}>
+            Check Out
           </button>
         )}
 
         {attendanceCompleted && (
-          <p className="done">
-            Attendance completed for today
-          </p>
+          <p className="done">Attendance completed for today</p>
         )}
       </div>
     </div>
