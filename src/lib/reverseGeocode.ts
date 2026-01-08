@@ -16,12 +16,6 @@ export async function reverseGeocode(lat: number, lon: number): Promise<string> 
   
       const a = data?.address
       return (
-        a?.neighbourhood ||
-        a?.suburb ||
-        a?.road ||
-        a?.city ||
-        a?.town ||
-        a?.village ||
         data?.display_name ||
         'Unknown location'
       )
