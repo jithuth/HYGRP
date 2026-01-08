@@ -4,22 +4,10 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import './attendance-map.css'
 
-type Attendance = {
-  FullName: string
-  check_in: string
-  check_out: string | null
-  check_in_latitude: number
-  check_in_longitude: number
-  check_out_latitude: number | null
-  check_out_longitude: number | null
-  check_in_photo: string
-  check_out_photo: string | null
-}
-
 export default function AdminAttendanceMap() {
   const mapRef = useRef<any>(null)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
-  const [records, setRecords] = useState<Attendance[]>([])
+  const [records, setRecords] = useState<any[]>([])
 
   useEffect(() => {
     load()
@@ -31,7 +19,12 @@ export default function AdminAttendanceMap() {
   }, [records])
 
   const load = async () => {
-    const { data } = await supabase.from('attendance').select('*')
+    const { data } = await supabase
+      .from('attendance')
+      .select('*')
+      .not('check_in_latitude', 'is', null)
+      .not('check_in_longitude', 'is', null)
+
     setRecords(data || [])
   }
 
@@ -47,12 +40,15 @@ export default function AdminAttendanceMap() {
         iconAnchor: [12, 41],
       })
 
-    const green = icon('green')
-    const red = icon('red')
-    const blue = icon('blue')
+    const first = records.find(
+      r =>
+        typeof r.check_in_latitude === 'number' &&
+        typeof r.check_in_longitude === 'number'
+    )
+    if (!first) return
 
     mapRef.current = L.map(mapContainerRef.current!).setView(
-      [records[0].check_in_latitude, records[0].check_in_longitude],
+      [first.check_in_latitude, first.check_in_longitude],
       11
     )
 
@@ -80,41 +76,23 @@ export default function AdminAttendanceMap() {
       if (same) {
         L.marker(
           [r.check_in_latitude, r.check_in_longitude],
-          { icon: blue }
-        )
-          .addTo(mapRef.current)
-          .bindPopup(
-            `<strong>${r.FullName}</strong><br/>
-             Same location<br/>
-             <img src="${inPhoto}" width="200"/>`
-          )
+          { icon: icon('blue') }
+        ).addTo(mapRef.current)
       } else {
         L.marker(
           [r.check_in_latitude, r.check_in_longitude],
-          { icon: green }
-        )
-          .addTo(mapRef.current)
-          .bindPopup(
-            `<strong>${r.FullName}</strong><br/>
-             Check-In<br/>
-             <img src="${inPhoto}" width="200"/>`
-          )
+          { icon: icon('green') }
+        ).addTo(mapRef.current)
 
-        if (r.check_out_latitude && r.check_out_longitude && outPhoto) {
+        if (outPhoto) {
           L.marker(
             [r.check_out_latitude, r.check_out_longitude],
-            { icon: red }
-          )
-            .addTo(mapRef.current)
-            .bindPopup(
-              `<strong>${r.FullName}</strong><br/>
-               Check-Out<br/>
-               <img src="${outPhoto}" width="200"/>`
-            )
+            { icon: icon('red') }
+          ).addTo(mapRef.current)
         }
       }
     })
   }
 
-  return <div ref={mapContainerRef} id="attendance-map" />
+  return <div id="attendance-map" ref={mapContainerRef} />
 }

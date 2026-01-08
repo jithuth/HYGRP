@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { compressImage } from '@/lib/imageCompress'
+import { processImageWithWatermark } from '@/lib/imageWithWatermark'
 import './technician-attendance.css'
 
 export default function TechnicianAttendance() {
@@ -11,7 +11,6 @@ export default function TechnicianAttendance() {
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
 
-  /* 🔍 Check if already checked-in today */
   useEffect(() => {
     detectOpenAttendance()
   }, [])
@@ -33,7 +32,6 @@ export default function TechnicianAttendance() {
     if (data) setAttendanceId(data.id)
   }
 
-  /* 📍 GPS */
   const getLocation = (): Promise<{ lat: number; lon: number }> =>
     new Promise((resolve, reject) =>
       navigator.geolocation.getCurrentPosition(
@@ -47,38 +45,48 @@ export default function TechnicianAttendance() {
       )
     )
 
-  /* 📸 Upload (compressed) */
-  const uploadPhoto = async (file: File) => {
-    const compressed = await compressImage(file)
+  const uploadPhoto = async (
+    file: File,
+    type: 'CHECK-IN' | 'CHECK-OUT',
+    lat: number,
+    lon: number
+  ) => {
+    const time = new Date().toLocaleString('en-GB', {
+      timeZone: 'Asia/Kuwait',
+      hour12: false,
+    })
+
+    const watermark = `${type} | ${time} | LAT ${lat.toFixed(
+      5
+    )}, LNG ${lon.toFixed(5)}`
+
+    const processed = await processImageWithWatermark(file, watermark)
+
     const path = `attendance/${crypto.randomUUID()}.jpg`
 
     const { error } = await supabase.storage
       .from('attendance-photos')
-      .upload(path, compressed, {
+      .upload(path, processed, {
         contentType: 'image/jpeg',
-        upsert: false,
       })
 
     if (error) throw error
     return path
   }
 
-  /* ✅ CHECK-IN */
   const handleCheckIn = async () => {
-    if (!photo) {
-      alert('Upload photo required')
-      return
-    }
+    if (!photo) return alert('Photo required')
 
     setLoading(true)
     setStatus('Checking in...')
 
     try {
       const { user } = (await supabase.auth.getUser()).data
-      if (!user) throw new Error('Not authenticated')
+      if (!user) throw new Error('Not logged in')
 
       const { lat, lon } = await getLocation()
-      const photoPath = await uploadPhoto(photo)
+
+      const photoPath = await uploadPhoto(photo, 'CHECK-IN', lat, lon)
 
       const FullName =
         user.user_metadata?.full_name ||
@@ -113,21 +121,18 @@ export default function TechnicianAttendance() {
     setLoading(false)
   }
 
-  /* ❌ CHECK-OUT */
   const handleCheckOut = async () => {
-    if (!photo || !attendanceId) {
-      alert('Upload photo required')
-      return
-    }
+    if (!photo || !attendanceId) return alert('Photo required')
 
     setLoading(true)
     setStatus('Checking out...')
 
     try {
       const { lat, lon } = await getLocation()
-      const photoPath = await uploadPhoto(photo)
 
-      const { error } = await supabase
+      const photoPath = await uploadPhoto(photo, 'CHECK-OUT', lat, lon)
+
+      await supabase
         .from('attendance')
         .update({
           check_out: new Date().toISOString(),
@@ -136,8 +141,6 @@ export default function TechnicianAttendance() {
           check_out_photo: photoPath,
         })
         .eq('id', attendanceId)
-
-      if (error) throw error
 
       setAttendanceId(null)
       setPhoto(null)
@@ -182,16 +185,16 @@ export default function TechnicianAttendance() {
         {!attendanceId ? (
           <button
             className="btn checkin"
-            disabled={loading}
             onClick={handleCheckIn}
+            disabled={loading}
           >
             Check In
           </button>
         ) : (
           <button
             className="btn checkout"
-            disabled={loading}
             onClick={handleCheckOut}
+            disabled={loading}
           >
             Check Out
           </button>

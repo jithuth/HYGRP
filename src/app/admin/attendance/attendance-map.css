@@ -5,8 +5,7 @@
   
   #attendance-map {
     width: 100%;
-    height: 75vh;
-    min-height: 450px;
+    height: 80vh;
     border-radius: 12px;
     background: #e5e7eb;
   }
