@@ -5,13 +5,15 @@ import { supabase } from '@/lib/supabaseClient'
 import './attendance-map.css'
 
 type Attendance = {
-  id: string
-  user_id: string
-  work_date: string
+  FullName: string
   check_in: string
-  latitude: number
-  longitude: number
-  photo_url: string
+  check_out: string | null
+  check_in_latitude: number
+  check_in_longitude: number
+  check_out_latitude: number | null
+  check_out_longitude: number | null
+  check_in_photo: string
+  check_out_photo: string | null
 }
 
 export default function AdminAttendanceMap() {
@@ -19,87 +21,100 @@ export default function AdminAttendanceMap() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const [records, setRecords] = useState<Attendance[]>([])
 
-  /* 1️⃣ Load attendance data */
   useEffect(() => {
-    const load = async () => {
-      const { data, error } = await supabase
-        .from('attendance')
-        .select('*')
-        .not('latitude', 'is', null)
-        .not('longitude', 'is', null)
-
-      if (error) {
-        console.error(error)
-        return
-      }
-
-      setRecords(data || [])
-    }
-
     load()
   }, [])
 
-  /* 2️⃣ Init map AFTER DOM + data are ready */
   useEffect(() => {
-    if (records.length === 0) return
-    if (!mapContainerRef.current) return
-    if (mapRef.current) return
-
+    if (!records.length || mapRef.current || !mapContainerRef.current) return
     initMap()
   }, [records])
+
+  const load = async () => {
+    const { data } = await supabase.from('attendance').select('*')
+    setRecords(data || [])
+  }
 
   const initMap = async () => {
     const L = (await import('leaflet')).default
 
-    // 🔥 REQUIRED: fix missing marker icons
-    delete (L.Icon.Default.prototype as any)._getIconUrl
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl:
-        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-      iconUrl:
-        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-      shadowUrl:
-        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-    })
+    const icon = (color: string) =>
+      new L.Icon({
+        iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
+        shadowUrl:
+          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+      })
 
-    // Initialize map
+    const green = icon('green')
+    const red = icon('red')
+    const blue = icon('blue')
+
     mapRef.current = L.map(mapContainerRef.current!).setView(
-      [records[0].latitude, records[0].longitude],
+      [records[0].check_in_latitude, records[0].check_in_longitude],
       11
     )
 
-    // Tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors',
-    }).addTo(mapRef.current)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(
+      mapRef.current
+    )
 
-    // Force resize after mount
-    setTimeout(() => {
-      mapRef.current.invalidateSize()
-    }, 300)
-
-    // Markers
     records.forEach((r) => {
-      const photoUrl = supabase.storage
-        .from('attendance-photos')
-        .getPublicUrl(r.photo_url).data.publicUrl
+      const same =
+        r.check_out_latitude &&
+        r.check_out_longitude &&
+        r.check_in_latitude === r.check_out_latitude &&
+        r.check_in_longitude === r.check_out_longitude
 
-      L.marker([Number(r.latitude), Number(r.longitude)])
-        .addTo(mapRef.current)
-        .bindPopup(`
-          <strong>Technician ID:</strong> ${r.user_id}<br/>
-          <strong>Date:</strong> ${r.work_date}<br/>
-          <strong>Check-In:</strong> ${new Date(r.check_in).toLocaleTimeString()}<br/>
-          <img src="${photoUrl}"
-               style="margin-top:8px;width:180px;border-radius:8px"/>
-        `)
+      const inPhoto = supabase.storage
+        .from('attendance-photos')
+        .getPublicUrl(r.check_in_photo).data.publicUrl
+
+      const outPhoto = r.check_out_photo
+        ? supabase.storage
+            .from('attendance-photos')
+            .getPublicUrl(r.check_out_photo).data.publicUrl
+        : null
+
+      if (same) {
+        L.marker(
+          [r.check_in_latitude, r.check_in_longitude],
+          { icon: blue }
+        )
+          .addTo(mapRef.current)
+          .bindPopup(
+            `<strong>${r.FullName}</strong><br/>
+             Same location<br/>
+             <img src="${inPhoto}" width="200"/>`
+          )
+      } else {
+        L.marker(
+          [r.check_in_latitude, r.check_in_longitude],
+          { icon: green }
+        )
+          .addTo(mapRef.current)
+          .bindPopup(
+            `<strong>${r.FullName}</strong><br/>
+             Check-In<br/>
+             <img src="${inPhoto}" width="200"/>`
+          )
+
+        if (r.check_out_latitude && r.check_out_longitude && outPhoto) {
+          L.marker(
+            [r.check_out_latitude, r.check_out_longitude],
+            { icon: red }
+          )
+            .addTo(mapRef.current)
+            .bindPopup(
+              `<strong>${r.FullName}</strong><br/>
+               Check-Out<br/>
+               <img src="${outPhoto}" width="200"/>`
+            )
+        }
+      }
     })
   }
 
-  return (
-    <div className="map-page">
-      <h1>Attendance – Map View</h1>
-      <div ref={mapContainerRef} id="attendance-map" />
-    </div>
-  )
+  return <div ref={mapContainerRef} id="attendance-map" />
 }

@@ -3,25 +3,34 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
+type AttendanceRow = {
+  id: string;
+  work_date: string;
+  check_in: string | null;
+  check_out: string | null;
+  remarks: string | null;
+};
+
 export default function AttendanceHistory() {
-  const [rows, setRows] = useState<any[]>([])
+  const [rows, setRows] = useState<AttendanceRow[]>([])
 
   useEffect(() => {
+    const load = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { data } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('work_date', { ascending: false })
+
+      if (data) {
+        setRows(data)
+      }
+    }
     load()
   }, [])
-
-  const load = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data } = await supabase
-      .from('attendance')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('work_date', { ascending: false })
-
-    setRows(data || [])
-  }
 
   return (
     <div style={{ padding: 20 }}>
